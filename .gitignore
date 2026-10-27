@@ -1,0 +1,13 @@
+# Resultados da coleta (gerados ao rodar o scraper)
+*.csv
+
+# Arquivos temporários do Python
+__pycache__/
+*.pyc
+
+# Ambiente virtual
+venv/
+.venv/
+
+# Configurações do editor
+.vscode/
