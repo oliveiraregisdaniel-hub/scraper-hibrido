@@ -4,7 +4,7 @@
 
 ![Status](https://img.shields.io/badge/status-em%20desenvolvimento-yellow)
 ![Python](https://img.shields.io/badge/python-3.x-blue?logo=python&logoColor=white)
-![Fases](https://img.shields.io/badge/fases-2%2F8%20conclu%C3%ADdas-lightgrey)
+![Fases](https://img.shields.io/badge/fases-3%2F8%20conclu%C3%ADdas-lightgrey)
 
 ---
 
@@ -24,11 +24,13 @@ Este projeto combina os dois: a coleta normal usa seletores, e a IA só é acion
 - Retentativas com espera progressiva em falhas de conexão
 - Para com segurança em erros graves, salvando o que já foi coletado
 - Exportação para CSV compatível com Excel
+- **Seletores em arquivo de configuração:** adaptar para outro site é editar o `config.json`, sem mexer no código
+- **Validação de cada item:** campos obrigatórios, números e links são conferidos antes de salvar
+- **Nada é descartado em silêncio:** itens com problema vão para `rejeitados.csv` com o motivo
+- Leitura de preços em vários formatos (`£51.77`, `R$ 1.234,56`, `1,234.56`)
 
 ## 🚧 Em desenvolvimento
 
-- Seletores em arquivo de configuração (trocar de site sem mexer no código)
-- Validação dos dados coletados
 - Banco SQLite com histórico e comparação entre coletas
 - Logs e alerta quando o site muda
 - Testes automatizados
@@ -54,20 +56,49 @@ pip install requests beautifulsoup4
 python scraper.py
 ```
 
-O resultado é salvo em `livros.csv`.
+O resultado é salvo em `livros.csv`, e os itens com problema em `rejeitados.csv`.
+
+Para usar outra configuração (por exemplo, outro site):
+
+```bash
+python scraper.py outro_site.json
+```
 
 **Exemplo de saída no terminal:**
 
 ```
+Coletando: Books to Scrape
+
 Página 1: https://books.toscrape.com/
-  20 livros (total: 20)
+  20 válidos (total: 20)
 Página 2: https://books.toscrape.com/catalogue/page-2.html
   Falha de conexão (tentativa 1/3)
   Aguardando 2s antes de tentar de novo...
-  20 livros (total: 40)
+  20 válidos (total: 40)
 ...
-1000 livros salvos em livros.csv
+1000 itens válidos salvos em livros.csv
 ```
+
+---
+
+## ⚙️ Configuração
+
+Tudo o que muda de um site para outro fica no `config.json`:
+
+```json
+"preco": {
+  "seletor": "p.price_color",
+  "tipo": "numero",
+  "obrigatorio": true
+}
+```
+
+| Chave | Para que serve |
+|---|---|
+| `seletor` | Onde o dado está na página (seletor CSS) |
+| `atributo` | Opcional: ler um atributo (`href`, `title`...) em vez do texto |
+| `tipo` | `texto`, `numero`, `url` ou `mapa` (tradução por tabela, ex.: `"Three"` → `3`) |
+| `obrigatorio` | Se `true`, o item é rejeitado quando esse campo falta |
 
 ---
 

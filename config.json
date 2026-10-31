@@ -1,0 +1,51 @@
+{
+  "site": {
+    "nome": "Books to Scrape",
+    "url_inicial": "https://books.toscrape.com/",
+    "arquivo_saida": "livros.csv",
+    "arquivo_rejeitados": "rejeitados.csv"
+  },
+
+  "coleta": {
+    "max_tentativas": 3,
+    "pausa_entre_paginas": 1,
+    "limite_paginas": null
+  },
+
+  "seletores": {
+    "item": "article.product_pod",
+    "proxima_pagina": "li.next a",
+
+    "campos": {
+      "titulo": {
+        "seletor": "h3 a",
+        "atributo": "title",
+        "tipo": "texto",
+        "obrigatorio": true
+      },
+      "preco": {
+        "seletor": "p.price_color",
+        "tipo": "numero",
+        "obrigatorio": true
+      },
+      "disponibilidade": {
+        "seletor": "p.availability",
+        "tipo": "texto",
+        "obrigatorio": false
+      },
+      "nota": {
+        "seletor": "p.star-rating",
+        "atributo": "class",
+        "tipo": "mapa",
+        "mapa": { "One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5 },
+        "obrigatorio": false
+      },
+      "link": {
+        "seletor": "h3 a",
+        "atributo": "href",
+        "tipo": "url",
+        "obrigatorio": true
+      }
+    }
+  }
+}

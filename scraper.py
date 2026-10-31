@@ -1,141 +1,282 @@
 """
-Scraper Híbrido — Fase 2: paginação + tratamento de erros + retentativas
-Percorre todas as páginas de books.toscrape.com e exporta os livros para CSV.
-Campos: título, preço, disponibilidade, nota e link.
+Scraper Híbrido — Fase 3: seletores em arquivo de configuração + validação dos dados
+Lê as regras de coleta do config.json, percorre todas as páginas,
+valida cada item e separa os válidos dos rejeitados.
+
+Uso:
+    python scraper.py                 (usa o config.json)
+    python scraper.py outro_site.json (usa outro arquivo de configuração)
 """
 
 import csv
+import json
+import re
+import sys
 import time
 from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
 
-URL = "https://books.toscrape.com/"
 HEADERS = {"User-Agent": "Mozilla/5.0 (scraper-hibrido; projeto de estudo)"}
-ARQUIVO_SAIDA = "livros.csv"
-
-MAX_TENTATIVAS = 3        # quantas vezes tentar baixar uma página antes de desistir
-PAUSA_ENTRE_PAGINAS = 1   # segundos de espera entre páginas, para não sobrecarregar o site
-LIMITE_PAGINAS = None    # None = todas; coloque 2 ou 3 para testar mais rápido
-
-# O site indica a nota pela classe CSS ("star-rating Three"), não por número
-NOTAS = {"One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5}
+TIPOS_VALIDOS = {"texto", "numero", "url", "mapa"}
 
 
-def baixar_pagina(url):
+# ---------------------------------------------------------------------------
+# Configuração
+# ---------------------------------------------------------------------------
+
+def carregar_config(caminho):
+    """Lê o arquivo de configuração e confere se tem tudo o que é necessário."""
+    try:
+        with open(caminho, encoding="utf-8") as arquivo:
+            config = json.load(arquivo)
+    except FileNotFoundError:
+        raise SystemExit(f"Arquivo de configuração não encontrado: {caminho}")
+    except json.JSONDecodeError as erro:
+        raise SystemExit(f"Erro no {caminho}, linha {erro.lineno}: {erro.msg}")
+
+    # Confere as chaves obrigatórias antes de começar a coleta
+    obrigatorias = {
+        "site": ["url_inicial", "arquivo_saida", "arquivo_rejeitados"],
+        "coleta": ["max_tentativas", "pausa_entre_paginas"],
+        "seletores": ["item", "campos"],
+    }
+    for secao, chaves in obrigatorias.items():
+        if secao not in config:
+            raise SystemExit(f"Falta a seção '{secao}' no {caminho}")
+        for chave in chaves:
+            if chave not in config[secao]:
+                raise SystemExit(f"Falta '{chave}' na seção '{secao}' do {caminho}")
+
+    for nome, regra in config["seletores"]["campos"].items():
+        if "seletor" not in regra:
+            raise SystemExit(f"O campo '{nome}' não tem 'seletor' no {caminho}")
+        tipo = regra.get("tipo", "texto")
+        if tipo not in TIPOS_VALIDOS:
+            raise SystemExit(f"Tipo '{tipo}' do campo '{nome}' não existe. Use: {TIPOS_VALIDOS}")
+        if tipo == "mapa" and "mapa" not in regra:
+            raise SystemExit(f"O campo '{nome}' é do tipo 'mapa', mas não tem a chave 'mapa'")
+
+    return config
+
+
+# ---------------------------------------------------------------------------
+# Download
+# ---------------------------------------------------------------------------
+
+def baixar_pagina(url, max_tentativas):
     """Baixa a página e devolve o HTML. Tenta de novo em falhas temporárias."""
-    for tentativa in range(1, MAX_TENTATIVAS + 1):
+    for tentativa in range(1, max_tentativas + 1):
         try:
             resposta = requests.get(url, headers=HEADERS, timeout=10)
             resposta.raise_for_status()
-            resposta.encoding = "utf-8"  # evita que "£" vire "Â£"
+            resposta.encoding = "utf-8"
             return resposta.text
 
         except requests.HTTPError as erro:
             status = erro.response.status_code
-            # Erros 4xx (ex.: 404) não melhoram tentando de novo: desiste na hora
             if status < 500:
                 raise
-            print(f"  Erro {status} no servidor (tentativa {tentativa}/{MAX_TENTATIVAS})")
+            print(f"  Erro {status} no servidor (tentativa {tentativa}/{max_tentativas})")
 
         except (requests.ConnectionError, requests.Timeout):
-            print(f"  Falha de conexão (tentativa {tentativa}/{MAX_TENTATIVAS})")
+            print(f"  Falha de conexão (tentativa {tentativa}/{max_tentativas})")
 
-        if tentativa < MAX_TENTATIVAS:
-            espera = 2 ** tentativa  # 2s, 4s... cada nova tentativa espera mais
+        if tentativa < max_tentativas:
+            espera = 2 ** tentativa
             print(f"  Aguardando {espera}s antes de tentar de novo...")
             time.sleep(espera)
 
-    raise RuntimeError(f"Não foi possível baixar {url} após {MAX_TENTATIVAS} tentativas")
+    raise RuntimeError(f"Não foi possível baixar {url} após {max_tentativas} tentativas")
 
 
-def extrair_livros(html, url_pagina):
-    """Recebe o HTML e a URL da página; devolve a lista de livros."""
+# ---------------------------------------------------------------------------
+# Extração
+# ---------------------------------------------------------------------------
+
+def texto_para_numero(texto):
+    """Converte textos como '£51.77', 'R$ 1.234,56' ou '1,234.56' em número."""
+    so_numeros = re.sub(r"[^\d,.]", "", texto)  # tira símbolos de moeda e espaços
+    if not so_numeros:
+        return None
+
+    if "," in so_numeros and "." in so_numeros:
+        # O separador que aparece por último é o decimal
+        if so_numeros.rfind(",") > so_numeros.rfind("."):
+            so_numeros = so_numeros.replace(".", "").replace(",", ".")  # 1.234,56
+        else:
+            so_numeros = so_numeros.replace(",", "")                    # 1,234.56
+    elif "," in so_numeros:
+        so_numeros = so_numeros.replace(",", ".")                       # 51,77
+
+    try:
+        return float(so_numeros)
+    except ValueError:
+        return None
+
+
+def extrair_campo(item, regra, url_pagina):
+    """Aplica a regra de um campo ao item. Devolve o valor, ou None se falhar."""
+    elemento = item.select_one(regra["seletor"])
+    if elemento is None:
+        return None  # seletor não encontrou nada: a validação vai acusar
+
+    atributo = regra.get("atributo")
+    bruto = elemento.get(atributo) if atributo else elemento.get_text(strip=True)
+    if bruto is None or bruto == "" or bruto == []:
+        return None
+
+    tipo = regra.get("tipo", "texto")
+
+    if tipo == "mapa":
+        # O atributo "class" vem como lista (ex.: ["star-rating", "Three"])
+        opcoes = bruto if isinstance(bruto, list) else [bruto]
+        for opcao in opcoes:
+            if opcao in regra["mapa"]:
+                return regra["mapa"][opcao]
+        return None
+
+    if isinstance(bruto, list):
+        bruto = " ".join(bruto)
+    bruto = bruto.strip()
+
+    if tipo == "numero":
+        return texto_para_numero(bruto)
+    if tipo == "url":
+        return urljoin(url_pagina, bruto)
+    return bruto or None
+
+
+def extrair_itens(html, url_pagina, seletores):
+    """Encontra todos os itens da página e extrai os campos de cada um."""
     sopa = BeautifulSoup(html, "html.parser")
-    livros = []
-
-    for card in sopa.select("article.product_pod"):
-        titulo = card.select_one("h3 a")["title"]
-
-        href = card.select_one("h3 a")["href"]
-        link = urljoin(url_pagina, href)  # relativo à página atual, não à inicial
-
-        preco_texto = card.select_one("p.price_color").get_text(strip=True)
-        preco = float(preco_texto.replace("£", ""))
-
-        disponibilidade = card.select_one("p.availability").get_text(strip=True)
-
-        classes = card.select_one("p.star-rating")["class"]  # ex.: ["star-rating", "Three"]
-        nota = NOTAS.get(classes[1])
-
-        livros.append({
-            "titulo": titulo,
-            "preco": preco,
-            "disponibilidade": disponibilidade,
-            "nota": nota,
-            "link": link,
-        })
-
-    return livros
+    itens = []
+    for bloco in sopa.select(seletores["item"]):
+        registro = {}
+        for nome, regra in seletores["campos"].items():
+            registro[nome] = extrair_campo(bloco, regra, url_pagina)
+        itens.append(registro)
+    return itens
 
 
-def proxima_pagina(html, url_pagina):
+def proxima_pagina(html, url_pagina, seletor):
     """Devolve a URL da próxima página, ou None se esta for a última."""
+    if not seletor:
+        return None  # site sem paginação
     sopa = BeautifulSoup(html, "html.parser")
-    botao = sopa.select_one("li.next a")
-    if botao is None:
+    botao = sopa.select_one(seletor)
+    if botao is None or not botao.get("href"):
         return None
     return urljoin(url_pagina, botao["href"])
 
 
-def coletar_tudo(url_inicial):
-    """Percorre as páginas uma a uma, juntando os livros de todas."""
-    todos = []
-    url = url_inicial
+# ---------------------------------------------------------------------------
+# Validação
+# ---------------------------------------------------------------------------
+
+def validar_item(registro, campos):
+    """Devolve a lista de problemas do item. Lista vazia = item válido."""
+    problemas = []
+    for nome, regra in campos.items():
+        valor = registro.get(nome)
+
+        if valor is None:
+            if regra.get("obrigatorio", False):
+                problemas.append(f"{nome} vazio ou não encontrado")
+            continue
+
+        tipo = regra.get("tipo", "texto")
+        if tipo == "numero" and valor < 0:
+            problemas.append(f"{nome} negativo ({valor})")
+        if tipo == "url" and not valor.startswith(("http://", "https://")):
+            problemas.append(f"{nome} não é um endereço válido ({valor})")
+
+    return problemas
+
+
+# ---------------------------------------------------------------------------
+# Coleta
+# ---------------------------------------------------------------------------
+
+def coletar_tudo(config):
+    """Percorre as páginas, separando itens válidos e rejeitados."""
+    seletores = config["seletores"]
+    coleta = config["coleta"]
+    limite = coleta.get("limite_paginas")
+
+    validos, rejeitados = [], []
+    url = config["site"]["url_inicial"]
     numero = 1
 
     while url:
         print(f"Página {numero}: {url}")
         try:
-            html = baixar_pagina(url)
+            html = baixar_pagina(url, coleta["max_tentativas"])
         except (requests.RequestException, RuntimeError) as erro:
-            # Para a coleta, mas devolve o que já foi juntado
             print(f"\nColeta interrompida na página {numero}: {erro}")
             break
 
-        livros = extrair_livros(html, url)
-        todos.extend(livros)
-        print(f"  {len(livros)} livros (total: {len(todos)})")
+        itens = extrair_itens(html, url, seletores)
+        if not itens:
+            print(f"  AVISO: nenhum item encontrado com o seletor '{seletores['item']}'."
+                  " O site pode ter mudado o layout.")
 
-        if LIMITE_PAGINAS and numero >= LIMITE_PAGINAS:
+        bons_na_pagina = 0
+        for registro in itens:
+            problemas = validar_item(registro, seletores["campos"])
+            if problemas:
+                registro["motivo"] = "; ".join(problemas)
+                rejeitados.append(registro)
+            else:
+                validos.append(registro)
+                bons_na_pagina += 1
+
+        ruins_na_pagina = len(itens) - bons_na_pagina
+        resumo = f"  {bons_na_pagina} válidos"
+        if ruins_na_pagina:
+            resumo += f", {ruins_na_pagina} rejeitados"
+        print(f"{resumo} (total: {len(validos)})")
+
+        if limite and numero >= limite:
             break
 
-        url = proxima_pagina(html, url)
+        url = proxima_pagina(html, url, seletores.get("proxima_pagina"))
         numero += 1
         if url:
-            time.sleep(PAUSA_ENTRE_PAGINAS)
+            time.sleep(coleta["pausa_entre_paginas"])
 
-    return todos
+    return validos, rejeitados
 
 
-def salvar_csv(livros, caminho):
-    """Grava a lista de livros num arquivo CSV."""
-    colunas = ["titulo", "preco", "disponibilidade", "nota", "link"]
+def salvar_csv(registros, caminho, colunas):
+    """Grava a lista de registros num arquivo CSV."""
     with open(caminho, "w", newline="", encoding="utf-8-sig") as arquivo:
         escritor = csv.DictWriter(arquivo, fieldnames=colunas)
         escritor.writeheader()
-        escritor.writerows(livros)
+        escritor.writerows(registros)
 
 
 def main():
-    livros = coletar_tudo(URL)
+    caminho_config = sys.argv[1] if len(sys.argv) > 1 else "config.json"
+    config = carregar_config(caminho_config)
+    site = config["site"]
+    colunas = list(config["seletores"]["campos"])  # a ordem das colunas segue o config
 
-    if livros:
-        salvar_csv(livros, ARQUIVO_SAIDA)
-        print(f"\n{len(livros)} livros salvos em {ARQUIVO_SAIDA}")
+    print(f"Coletando: {site.get('nome', site['url_inicial'])}\n")
+    validos, rejeitados = coletar_tudo(config)
+
+    print()
+    if validos:
+        salvar_csv(validos, site["arquivo_saida"], colunas)
+        print(f"{len(validos)} itens válidos salvos em {site['arquivo_saida']}")
     else:
-        print("\nNenhum livro coletado.")
+        print("Nenhum item válido coletado.")
+
+    if rejeitados:
+        salvar_csv(rejeitados, site["arquivo_rejeitados"], colunas + ["motivo"])
+        print(f"{len(rejeitados)} itens rejeitados salvos em {site['arquivo_rejeitados']}"
+              " (veja a coluna 'motivo')")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 
 ![Status](https://img.shields.io/badge/status-em%20desenvolvimento-yellow)
 ![Python](https://img.shields.io/badge/python-3.x-blue?logo=python&logoColor=white)
-![Fases](https://img.shields.io/badge/fases-2%2F8%20conclu%C3%ADdas-lightgrey)
+![Fases](https://img.shields.io/badge/fases-3%2F8%20conclu%C3%ADdas-lightgrey)
 ![Testes](https://img.shields.io/badge/testes-em%20breve-lightgrey)
 
 ---
@@ -35,7 +35,7 @@ flowchart LR
 |---|------|:----------:|:------:|
 | 1 | Coleta básica | 1–2 dias | ✅ Concluída |
 | 2 | Paginação + erros + retentativas | 1–2 dias | ✅ Concluída |
-| 3 | Seletores em config + validação | 1–2 dias | ⬜ A fazer |
+| 3 | Seletores em config + validação | 1–2 dias | ✅ Concluída |
 | 4 | SQLite + duplicatas + comparação | 2 dias | ⬜ A fazer |
 | 5 | Logs + alerta de quebra | 1 dia | ⬜ A fazer |
 | 6 | Testes com páginas salvas | 2 dias | ⬜ A fazer |
@@ -66,8 +66,8 @@ flowchart LR
 
 ### 3️⃣ Configuração e validação · `1–2 dias`
 **Objetivo:** trocar de site sem mexer no código.
-- [ ] Seletores num arquivo de configuração
-- [ ] Validação de cada registro coletado (campos vazios, tipos, formatos)
+- [x] Seletores num arquivo de configuração
+- [x] Validação de cada registro coletado (campos vazios, tipos, formatos)
 
 > 💡 **Demonstra:** separação entre lógica e configuração; reaproveitamento para novos clientes.
 
